@@ -1,201 +1,55 @@
-# voice-mcp
+# voice-mcp — private OAuth hardening branch
 
-An MCP (Model Context Protocol) server for AI voice synthesis with an inline audio player. Give your AI assistant a custom cloned voice!
+This fork turns the original public voice Worker into a private MCP resource server. C1 is an offline implementation milestone: it has no real OAuth tenant, TTS key, or deployment attached yet.
 
-![License](https://img.shields.io/badge/license-MIT-green)
+## Security model
 
-## Fork Notice
+- `/mcp` requires a verified OAuth JWT with issuer, audience, expiry, `voice:generate` scope, and an allow-listed `sub`.
+- `/.well-known/oauth-protected-resource` is public for OAuth discovery.
+- `/healthz` is public and intentionally minimal.
+- Legacy `/speak`, `/panel`, `/events/latest`, `/history`, `/status`, and landing-page routes return `404`.
+- Generated audio and text are returned only in the MCP tool result. The Worker does not cache or persist either.
+- A Durable Object applies per-subject daily and per-minute quotas atomically.
+- TTS requests have an explicit timeout and no automatic retry. Logs contain only request metadata, character count, duration, provider, and a one-way subject hash.
+- The inline card plays audio, toggles the transcript, and downloads the current result as an MP3 blob.
 
-This repository is a fork of [garan0613/voice-mcp](https://github.com/garan0613/voice-mcp), released under the MIT License.
+## Defaults
 
-This fork lives at [Yinglianchun/voice-mcp](https://github.com/Yinglianchun/voice-mcp) and keeps the original MCP `speak(text)` behavior while adding provider switching, ElevenLabs support, and a live visualizer panel.
+| Limit | Default |
+| --- | ---: |
+| Visible input | 500 Unicode characters |
+| Audio result | 4 MiB |
+| Calls per minute | 3 |
+| Calls per UTC day | 30 |
+| Characters per UTC day | 10,000 |
+| TTS timeout | 20 seconds |
 
-## What Changed in This Fork
+All defaults can be changed with the corresponding `MAX_*` or `TTS_TIMEOUT_MS` Worker variable.
 
-- Added `TTS_PROVIDER` switching between DashScope/CosyVoice and ElevenLabs.
-- Kept the old `speak(text)` call compatible, and extended it to `speak(text, style?, raw_tags?)`.
-- Added ElevenLabs TTS support with configurable model, output format, voice settings, and optional v3 audio tags.
-- Added style-to-tag mapping for ElevenLabs v3, while stripping raw audio tags before DashScope/CosyVoice calls.
-- Added `/status` fields for provider, model, voice, configuration state, and audio tag availability.
-- Added `/panel`, a breathing audio visualizer that listens for the latest MCP `speak` result.
-- Added `/events/latest` so the panel can receive the newest generated voice and text.
-- Added ElevenLabs history loading through `/history?id=...`.
-- Added line-style captions, playback-linked caption timing when ElevenLabs timing data is available, and MP3 download from the panel.
+## Required production bindings
 
-## Features
+These remain placeholders until the authorized account-configuration phase.
 
-- **Custom Voice Cloning** — Use DashScope Qwen-TTS Voice Cloning API or ElevenLabs TTS with your own cloned voice
-- **Inline Audio Player** — Beautiful WeChat-style player with waveform visualization
-- **Breathing Visualizer Panel** — Use `/panel` to listen for the latest MCP `speak` output
-- **Transcript Toggle** — Show/hide the spoken text
-- **Dark Mode Support** — Automatic theme adaptation
-- **Cloudflare Workers** — Fast, serverless deployment
+| Variable/secret | Purpose |
+| --- | --- |
+| `OAUTH_ISSUER` | Exact OAuth issuer URL |
+| `OAUTH_AUDIENCE` | Expected JWT audience |
+| `OAUTH_RESOURCE` | Canonical public MCP URL |
+| `OAUTH_JWKS_URI` | HTTPS JWKS endpoint |
+| `ALLOWED_SUBS` | Comma-separated owner subject IDs |
+| `TTS_PROVIDER` | `dashscope` or `elevenlabs` |
+| Provider API key and voice ID | Private TTS credentials |
+| `BOT_NAME` | Safe display name in the voice card |
 
-## Demo
+Never commit real values. Configure them as Worker secrets/variables only during the deployment phase.
 
-When you call the `speak` tool, you get:
-- A sleek audio player with play/pause button
-- Animated waveform that follows playback progress
-- Duration display
-- Expandable transcript
-
-## Quick Start
-
-### 1. Clone the repository
-
-```bash
-git clone https://github.com/Yinglianchun/voice-mcp.git
-cd voice-mcp
-```
-
-### 2. Install dependencies
+## Offline verification
 
 ```bash
-npm install
+npm ci --ignore-scripts
+npm run check
+npm run build
+npm audit --omit=dev
 ```
 
-### 3. Configure TTS provider
-
-Set the provider. If omitted, the worker uses DashScope.
-
-```bash
-npx wrangler secret put TTS_PROVIDER  # dashscope or elevenlabs
-```
-
-#### DashScope / CosyVoice
-
-You'll need an Alibaba Cloud DashScope account with Qwen-TTS Voice Cloning access.
-
-Add your secrets to Cloudflare:
-
-```bash
-npx wrangler secret put DASHSCOPE_API_KEY
-npx wrangler secret put VOICE_ID
-npx wrangler secret put BOT_NAME  # Optional, defaults to "AI"
-```
-
-Optional:
-
-```bash
-npx wrangler secret put TTS_MODEL  # Default: qwen3-tts-vc-2026-01-22
-```
-
-#### ElevenLabs
-
-Add your ElevenLabs secrets to Cloudflare:
-
-```bash
-npx wrangler secret put ELEVENLABS_API_KEY
-npx wrangler secret put ELEVENLABS_VOICE_ID
-npx wrangler secret put ELEVENLABS_VOICE_ID_ZH
-npx wrangler secret put ELEVENLABS_VOICE_ID_EN
-```
-
-Optional:
-
-```bash
-npx wrangler secret put ELEVENLABS_MODEL_ID       # Default: eleven_v3
-npx wrangler secret put ELEVENLABS_OUTPUT_FORMAT  # Default: mp3_44100_128
-npx wrangler secret put ELEVENLABS_LANGUAGE_CODE  # Example: zh
-npx wrangler secret put ELEVENLABS_LANGUAGE_CODE_ZH  # Default with zh voice: zh
-npx wrangler secret put ELEVENLABS_LANGUAGE_CODE_EN  # Default with en voice: en
-npx wrangler secret put ELEVENLABS_STABILITY      # Example: 0.36
-npx wrangler secret put ELEVENLABS_STYLE          # Example: 0.85
-npx wrangler secret put ELEVENLABS_SPEED          # Example: 1.20
-```
-
-`eleven_v3` supports audio tags such as `[whispers]`, `[sighs]`, and `[laughs]`.
-`eleven_multilingual_v2` is a steadier choice for ordinary reading.
-
-### 4. Deploy
-
-```bash
-npx wrangler deploy
-```
-
-### 5. Connect to Claude.ai
-
-1. Go to **Settings -> Connectors -> Add Connector**
-2. Enter your Worker URL: `https://your-worker.workers.dev/mcp`
-3. Done! The `speak` tool is now available.
-
-## Configuration
-
-| Variable | Required | Description |
-|----------|----------|-------------|
-| `TTS_PROVIDER` | No | `dashscope` or `elevenlabs`; defaults to `dashscope` |
-| `DASHSCOPE_API_KEY` | DashScope | Your DashScope API key |
-| `VOICE_ID` | DashScope | The cloned voice ID (Qwen-TTS VC) |
-| `BOT_NAME` | No | Display name (default: "AI") |
-| `TTS_MODEL` | No | DashScope TTS model (default: `cosyvoice-v3.5-plus`) |
-| `ELEVENLABS_API_KEY` | ElevenLabs | Your ElevenLabs API key |
-| `ELEVENLABS_VOICE_ID` | ElevenLabs | Default/fallback ElevenLabs voice ID |
-| `ELEVENLABS_VOICE_ID_ZH` | No | Chinese ElevenLabs voice ID; auto-selected when text contains Chinese |
-| `ELEVENLABS_VOICE_ID_EN` | No | English ElevenLabs voice ID; auto-selected for English text |
-| `ELEVENLABS_MODEL_ID` | No | ElevenLabs model (default: `eleven_v3`) |
-| `ELEVENLABS_OUTPUT_FORMAT` | No | ElevenLabs output format (default: `mp3_44100_128`) |
-| `ELEVENLABS_LANGUAGE_CODE` | No | ElevenLabs request language code, such as `zh` |
-| `ELEVENLABS_LANGUAGE_CODE_ZH` | No | Chinese request language code; defaults to `zh` when `ELEVENLABS_VOICE_ID_ZH` is set |
-| `ELEVENLABS_LANGUAGE_CODE_EN` | No | English request language code; defaults to `en` when `ELEVENLABS_VOICE_ID_EN` is set |
-| `ELEVENLABS_STABILITY` | No | ElevenLabs voice setting override, such as `0.36` |
-| `ELEVENLABS_SIMILARITY_BOOST` | No | ElevenLabs voice setting override |
-| `ELEVENLABS_STYLE` | No | ElevenLabs voice setting override, such as `0.85` |
-| `ELEVENLABS_USE_SPEAKER_BOOST` | No | ElevenLabs voice setting override, `true` or `false` |
-| `ELEVENLABS_SPEED` | No | ElevenLabs voice setting override, such as `1.20` |
-
-## API Endpoints
-
-| Endpoint | Description |
-|----------|-------------|
-| `GET /mcp` | MCP server (SSE protocol) |
-| `GET /panel` | Breathing voice visualizer that listens for MCP `speak` |
-| `GET /events/latest` | Latest generated voice event for the visualizer |
-| `GET /history?id=...` | Load an ElevenLabs history item into the visualizer |
-| `GET /speak?text=Hello` | Direct audio file |
-| `GET /speak?text=Hello&style=soft` | Direct audio file with optional style |
-| `GET /speak?text=[whispers]%20Hello` | Preserve detected ElevenLabs v3 audio tags |
-| `GET /speak?text=[whispers]%20Hello&raw_tags=false` | Strip audio tags explicitly |
-| `POST /speak` with `{ "text": "...", "style": "soft" }` | Direct audio file without URL-length limits |
-| `GET /status` | Health check |
-
-The MCP `speak` tool accepts:
-
-```ts
-speak(text: string, style?: string, raw_tags?: boolean)
-```
-
-Existing `speak(text)` calls remain compatible.
-
-When the MCP `speak` tool succeeds, the Worker stores the latest voice event for
-`/panel`. Keep `/panel` open while using `speak`; when a new voice arrives, the
-visualizer loads it and enables playback.
-ElevenLabs uses the speech-with-timing API to store line-level caption cues for
-sync; providers without timing data fall back to approximate caption progress.
-
-When `TTS_PROVIDER=elevenlabs` and `ELEVENLABS_MODEL_ID=eleven_v3`, detected
-audio tags such as `[whispers]` and `[sighs]` are preserved automatically.
-You can still pass `raw_tags=false` to strip them explicitly. Without raw tags,
-supported styles map to ElevenLabs v3 audio tags:
-
-| Style | Audio tag |
-|-------|-----------|
-| `soft` | `[whispers]` |
-| `teasing` | `[mischievously]` |
-| `excited` | `[excited]` |
-| `tired` | `[sighs]` |
-| `laughing` | `[laughs]` |
-| `curious` | `[curious]` |
-
-DashScope/CosyVoice and non-v3 ElevenLabs calls strip raw audio tags before sending text to the provider.
-
-## Tech Stack
-
-- [Cloudflare Workers](https://workers.cloudflare.com/) — Serverless runtime
-- [MCP SDK](https://github.com/modelcontextprotocol/sdk) — Model Context Protocol
-- [DashScope Qwen-TTS VC](https://dashscope.aliyun.com/) — Voice synthesis
-- [ElevenLabs Text to Speech](https://elevenlabs.io/docs/api-reference/text-to-speech/convert) — Voice synthesis
-- [ext-apps](https://modelcontextprotocol.io/docs/concepts/ext-apps) — Inline UI rendering
-
-## License
-
-MIT. This fork preserves the upstream license from [garan0613/voice-mcp](https://github.com/garan0613/voice-mcp).
+`npm run build` is a Wrangler dry-run. It does not publish the Worker.

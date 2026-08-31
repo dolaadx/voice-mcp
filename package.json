@@ -1,23 +1,35 @@
 {
   "name": "voice-mcp",
-  "version": "1.0.0",
-  "description": "An MCP server for AI voice synthesis with inline audio player",
+  "version": "1.1.0-c1",
+  "description": "OAuth-protected MCP server for private voice synthesis",
   "private": true,
   "type": "module",
   "scripts": {
     "dev": "wrangler dev",
     "deploy": "wrangler deploy",
-    "tail": "wrangler tail"
+    "tail": "wrangler tail",
+    "typecheck": "tsc --noEmit",
+    "test": "node --experimental-strip-types --experimental-loader ./tests/cloudflare-loader.mjs --test tests/*.test.ts",
+    "build": "wrangler deploy --dry-run --outdir dist",
+    "check": "npm run typecheck && npm test"
   },
   "dependencies": {
-    "@modelcontextprotocol/sdk": "1.26.0",
-    "agents": "^0.4.1",
-    "zod": "^4.1.13"
+    "@modelcontextprotocol/sdk": "1.30.0",
+    "agents": "0.22.0",
+    "jose": "6.1.0",
+    "zod": "4.5.4"
   },
   "devDependencies": {
-    "@cloudflare/workers-types": "^4.20250124.0",
-    "typescript": "^5.9.3",
-    "wrangler": "^4.66.0"
+    "@cloudflare/workers-types": "5.20260831.1",
+    "typescript": "5.9.3",
+    "wrangler": "4.127.1"
+  },
+  "overrides": {
+    "@hono/node-server": "1.19.15",
+    "body-parser": "2.3.0",
+    "fast-uri": "3.1.5",
+    "hono": "4.13.5",
+    "ip-address": "10.7.0"
   },
   "keywords": [
     "mcp",
@@ -25,8 +37,8 @@
     "tts",
     "text-to-speech",
     "ai",
-    "claude",
-    "minimax"
+    "chatgpt",
+    "oauth"
   ],
   "license": "MIT"
 }
