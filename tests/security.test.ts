@@ -54,7 +54,7 @@ test("only minimal public metadata and health endpoints are exposed", async () =
   assert.equal(metadata.status, 200);
   assert.deepEqual(await metadata.json(), {
     resource: "https://voice.example/mcp",
-    authorization_servers: ["https://issuer.example"],
+    authorization_servers: ["https://issuer.example/"],
     scopes_supported: ["voice:generate"],
     bearer_methods_supported: ["header"],
   });
