@@ -329,7 +329,11 @@ function createVoiceServer(env: Env, subject: string): McpServer {
     title: `${botName} 的声音`,
     description: "Generate one private voice card. Audio is returned inline and is not stored by the Worker.",
     inputSchema: z.object({ text: z.string().describe("Text to speak"), style: z.enum(STYLE_VALUES).optional().describe("Optional constrained speaking style") }),
-    _meta: { ui: { resourceUri: VOICE_RESOURCE_URI }, "ui/resourceUri": VOICE_RESOURCE_URI },
+    _meta: {
+      ui: { resourceUri: VOICE_RESOURCE_URI },
+      "ui/resourceUri": VOICE_RESOURCE_URI,
+      securitySchemes: [{ type: "oauth2", scopes: [VOICE_SCOPE] }],
+    },
   }, async ({ text, style }) => {
     const requestId = crypto.randomUUID();
     const startedAt = Date.now();
@@ -357,7 +361,7 @@ function resourceMetadata(request: Request, env: Env): Response {
   const origin = new URL(request.url).origin;
   return Response.json({
     resource: env.OAUTH_RESOURCE || `${origin}/mcp`,
-    authorization_servers: env.OAUTH_ISSUER ? [env.OAUTH_ISSUER.replace(/\/$/, "")] : [],
+    authorization_servers: env.OAUTH_ISSUER ? [env.OAUTH_ISSUER] : [],
     scopes_supported: [VOICE_SCOPE],
     bearer_methods_supported: ["header"],
   }, { headers: { "Cache-Control": "public, max-age=300", "Content-Type": "application/json" } });
