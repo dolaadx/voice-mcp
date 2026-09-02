@@ -30,12 +30,11 @@ test("inline script serialization blocks script breakout", () => {
   assert.match(html, /window\.openai\?\.toolOutput/);
   assert.match(html, /openai:set_globals/);
   assert.match(html, /ui\/notifications\/tool-result/);
-  assert.match(html, /window\.openai\.uploadFile/);
-  assert.match(html, /preparedDownloadUrl/);
-  assert.match(html, /点击下载/);
-  assert.match(html, /下载准备失败（/);
+  assert.match(html, /ui\/download-file/);
+  assert.match(html, /type:'resource'/);
+  assert.match(html, /blob:loadedBase64/);
+  assert.doesNotMatch(html, /window\.openai\.uploadFile/);
   assert.doesNotMatch(html, /window\.openai\.openExternal/);
-  assert.match(html, /window\.openai\.getFileDownloadUrl/);
   const script = html.match(/<script>([\s\S]*)<\/script>/)?.[1];
   assert.ok(script);
   assert.doesNotThrow(() => new Function(script));
@@ -148,7 +147,7 @@ test("only minimal public metadata and health endpoints are exposed", async () =
     bearer_methods_supported: ["header"],
   });
   const health = await worker.fetch(new Request("https://voice.example/healthz"), configuredEnv, ctx);
-  assert.deepEqual(await health.json(), { status: "ok", service: "voice-mcp", version: "1.1.0-c4" });
+  assert.deepEqual(await health.json(), { status: "ok", service: "voice-mcp", version: "1.1.0-c5" });
 });
 
 test("legacy public routes are gone", async () => {
