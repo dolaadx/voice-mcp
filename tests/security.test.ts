@@ -27,6 +27,9 @@ test("inline script serialization blocks script breakout", () => {
   assert.match(html, /event\.source!==window\.parent/);
   assert.match(html, /下载音频/);
   assert.match(html, /audio_mime_type/);
+  assert.match(html, /window\.openai\?\.toolOutput/);
+  assert.match(html, /openai:set_globals/);
+  assert.match(html, /ui\/notifications\/tool-result/);
 });
 
 test("DashScope uses the Qwen3-TTS endpoint and preserves returned audio type", async (t) => {
@@ -108,7 +111,7 @@ test("only minimal public metadata and health endpoints are exposed", async () =
     bearer_methods_supported: ["header"],
   });
   const health = await worker.fetch(new Request("https://voice.example/healthz"), configuredEnv, ctx);
-  assert.deepEqual(await health.json(), { status: "ok", service: "voice-mcp", version: "1.1.0-c1" });
+  assert.deepEqual(await health.json(), { status: "ok", service: "voice-mcp", version: "1.1.0-c2" });
 });
 
 test("legacy public routes are gone", async () => {
