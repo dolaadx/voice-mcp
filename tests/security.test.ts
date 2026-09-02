@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import worker, { authorizeClaims, consumeQuotaState, generateDashScope, getPlayerHtml, serializeForInlineScript, validateSpeakText, type Env } from "../src/index.ts";
+import worker, { archiveAudio, authorizeClaims, consumeQuotaState, generateDashScope, getPlayerHtml, serializeForInlineScript, validateSpeakText, type Env } from "../src/index.ts";
 
 const limits = { maxDailyCalls: 2, maxDailyChars: 10, maxCallsPerMinute: 2 };
 const configuredEnv = {
@@ -25,19 +25,39 @@ test("inline script serialization blocks script breakout", () => {
   const html = getPlayerHtml("</script><script>alert(1)</script>");
   assert.equal(html.match(/<script>/g)?.length, 1);
   assert.match(html, /event\.source!==window\.parent/);
-  assert.match(html, /下载音频/);
+  assert.match(html, /已保存到语音库/);
   assert.match(html, /audio_mime_type/);
   assert.match(html, /window\.openai\?\.toolOutput/);
   assert.match(html, /openai:set_globals/);
   assert.match(html, /ui\/notifications\/tool-result/);
-  assert.match(html, /ui\/download-file/);
-  assert.match(html, /type:'resource'/);
-  assert.match(html, /blob:loadedBase64/);
+  assert.match(html, /saved_to_storage/);
+  assert.doesNotMatch(html, /ui\/download-file/);
   assert.doesNotMatch(html, /window\.openai\.uploadFile/);
   assert.doesNotMatch(html, /window\.openai\.openExternal/);
   const script = html.match(/<script>([\s\S]*)<\/script>/)?.[1];
   assert.ok(script);
   assert.doesNotThrow(() => new Function(script));
+});
+
+test("Supabase S3 archive signs and uploads one private audio object", async (t) => {
+  const originalFetch = globalThis.fetch;
+  t.after(() => { globalThis.fetch = originalFetch; });
+  let request: Request | undefined;
+  globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+    request = new Request(input, init);
+    return new Response(null, { status: 200 });
+  }) as typeof fetch;
+  const archived = await archiveAudio({
+    SUPABASE_S3_ENDPOINT: "https://project.storage.supabase.co/storage/v1/s3",
+    SUPABASE_S3_REGION: "us-west-1",
+    SUPABASE_S3_ACCESS_KEY_ID: "access-key",
+    SUPABASE_S3_SECRET_ACCESS_KEY: "secret-key",
+  }, { audioBase64: "UklGRg==", audioMimeType: "audio/wav", fileExtension: "wav", provider: "dashscope" }, "request-id", new Date("2026-09-02T01:02:03.000Z"));
+  assert.deepEqual(archived, { saved: true, path: "2026/09/02/voice-2026-09-02T01-02-03-000Z-request-id.wav" });
+  assert.equal(request?.method, "PUT");
+  assert.equal(new URL(request?.url || "").pathname, "/storage/v1/s3/voice-mcp-audio/2026/09/02/voice-2026-09-02T01-02-03-000Z-request-id.wav");
+  assert.match(request?.headers.get("Authorization") || "", /^AWS4-HMAC-SHA256 /);
+  assert.equal(request?.headers.get("Content-Type"), "audio/wav");
 });
 
 test("DashScope instruct model receives separate emotional instructions", async (t) => {
@@ -147,7 +167,7 @@ test("only minimal public metadata and health endpoints are exposed", async () =
     bearer_methods_supported: ["header"],
   });
   const health = await worker.fetch(new Request("https://voice.example/healthz"), configuredEnv, ctx);
-  assert.deepEqual(await health.json(), { status: "ok", service: "voice-mcp", version: "1.1.0-c5" });
+  assert.deepEqual(await health.json(), { status: "ok", service: "voice-mcp", version: "1.1.0-c6" });
 });
 
 test("legacy public routes are gone", async () => {
