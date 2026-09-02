@@ -30,6 +30,39 @@ test("inline script serialization blocks script breakout", () => {
   assert.match(html, /window\.openai\?\.toolOutput/);
   assert.match(html, /openai:set_globals/);
   assert.match(html, /ui\/notifications\/tool-result/);
+  assert.match(html, /window\.openai\.uploadFile/);
+  assert.match(html, /window\.openai\.getFileDownloadUrl/);
+  const script = html.match(/<script>([\s\S]*)<\/script>/)?.[1];
+  assert.ok(script);
+  assert.doesNotThrow(() => new Function(script));
+});
+
+test("DashScope instruct model receives separate emotional instructions", async (t) => {
+  const originalFetch = globalThis.fetch;
+  t.after(() => { globalThis.fetch = originalFetch; });
+  let body: Record<string, unknown> | undefined;
+  globalThis.fetch = (async (_input: RequestInfo | URL, init?: RequestInit) => {
+    body = JSON.parse(String(init?.body));
+    return Response.json({ output: { audio: { data: "UklGRg==" } } });
+  }) as typeof fetch;
+
+  await generateDashScope({
+    DASHSCOPE_API_KEY: "test-key",
+    VOICE_ID: "Kai",
+    TTS_MODEL: "qwen3-tts-instruct-flash",
+    TTS_INSTRUCTIONS: "温柔自然地说。",
+  } as Env, "宝宝，我回来了。", "soft");
+
+  assert.deepEqual(body, {
+    model: "qwen3-tts-instruct-flash",
+    input: {
+      text: "宝宝，我回来了。",
+      voice: "Kai",
+      language_type: "Chinese",
+      instructions: "温柔自然地说。更轻柔、更贴近耳语，但保持清晰。",
+      optimize_instructions: true,
+    },
+  });
 });
 
 test("DashScope uses the Qwen3-TTS endpoint and preserves returned audio type", async (t) => {
@@ -111,7 +144,7 @@ test("only minimal public metadata and health endpoints are exposed", async () =
     bearer_methods_supported: ["header"],
   });
   const health = await worker.fetch(new Request("https://voice.example/healthz"), configuredEnv, ctx);
-  assert.deepEqual(await health.json(), { status: "ok", service: "voice-mcp", version: "1.1.0-c2" });
+  assert.deepEqual(await health.json(), { status: "ok", service: "voice-mcp", version: "1.1.0-c3" });
 });
 
 test("legacy public routes are gone", async () => {
