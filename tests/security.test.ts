@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import worker, { authorizeClaims, consumeQuotaState, getPlayerHtml, serializeForInlineScript, validateSpeakText, type Env } from "../src/index.ts";
+import worker, { authorizeClaims, consumeQuotaState, generateDashScope, getPlayerHtml, serializeForInlineScript, validateSpeakText, type Env } from "../src/index.ts";
 
 const limits = { maxDailyCalls: 2, maxDailyChars: 10, maxCallsPerMinute: 2 };
 const configuredEnv = {
@@ -25,7 +25,40 @@ test("inline script serialization blocks script breakout", () => {
   const html = getPlayerHtml("</script><script>alert(1)</script>");
   assert.equal(html.match(/<script>/g)?.length, 1);
   assert.match(html, /event\.source!==window\.parent/);
-  assert.match(html, /下载 MP3/);
+  assert.match(html, /下载音频/);
+  assert.match(html, /audio_mime_type/);
+});
+
+test("DashScope uses the Qwen3-TTS endpoint and preserves returned audio type", async (t) => {
+  const originalFetch = globalThis.fetch;
+  t.after(() => { globalThis.fetch = originalFetch; });
+  const calls: Array<{ url: string; init?: RequestInit }> = [];
+  globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+    const url = String(input);
+    calls.push({ url, init });
+    if (calls.length === 1) {
+      return Response.json({ output: { audio: { url: "https://dashscope-result.oss-cn-beijing.aliyuncs.com/private/result.wav" } } });
+    }
+    return new Response(new Uint8Array([82, 73, 70, 70]), { headers: { "Content-Type": "audio/wav" } });
+  }) as typeof fetch;
+
+  const result = await generateDashScope({
+    DASHSCOPE_API_KEY: "test-key",
+    VOICE_ID: "Kai",
+    TTS_MODEL: "qwen3-tts-flash",
+  } as Env, "哥哥，我回来了。");
+
+  assert.equal(calls[0]?.url, "https://dashscope.aliyuncs.com/api/v1/services/aigc/multimodal-generation/generation");
+  assert.deepEqual(JSON.parse(String(calls[0]?.init?.body)), {
+    model: "qwen3-tts-flash",
+    input: { text: "哥哥，我回来了。", voice: "Kai", language_type: "Chinese" },
+  });
+  assert.equal(new Headers(calls[0]?.init?.headers).get("Authorization"), "Bearer test-key");
+  assert.equal(calls[1]?.url, "https://dashscope-result.oss-cn-beijing.aliyuncs.com/private/result.wav");
+  assert.equal(result.audioBase64, "UklGRg==");
+  assert.equal(result.audioMimeType, "audio/wav");
+  assert.equal(result.fileExtension, "wav");
+  assert.equal(result.provider, "dashscope");
 });
 
 test("quota state enforces minute, day, and character limits", () => {
