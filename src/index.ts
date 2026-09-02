@@ -3,9 +3,10 @@ import { createMcpHandler } from "agents/mcp";
 import { createRemoteJWKSet, jwtVerify, type JWTPayload } from "jose";
 import { z } from "zod";
 
-const VOICE_RESOURCE_URI = "ui://voice-mcp/player-v2.html";
+const VOICE_RESOURCE_URI = "ui://voice-mcp/player-v3.html";
 const VOICE_SCOPE = "voice:generate";
 const STYLE_VALUES = ["soft", "teasing", "excited", "tired", "laughing", "curious"] as const;
+const DEFAULT_DASHSCOPE_INSTRUCTIONS = "用成熟、温柔、亲近而自然的成年男性语气表达。语速稍慢，音量轻柔，情绪真诚克制，有自然停顿和细微起伏，避免播音腔、客服腔和夸张表演。";
 const DEFAULT_LIMITS = {
   maxVisibleChars: 500,
   maxAudioBytes: 4 * 1024 * 1024,
@@ -26,6 +27,7 @@ export interface Env {
   DASHSCOPE_API_KEY?: string;
   VOICE_ID?: string;
   TTS_MODEL?: string;
+  TTS_INSTRUCTIONS?: string;
   ELEVENLABS_API_KEY?: string;
   ELEVENLABS_VOICE_ID?: string;
   ELEVENLABS_MODEL_ID?: string;
@@ -267,6 +269,20 @@ function stylePrefix(style: typeof STYLE_VALUES[number] | undefined): string {
   return mapping[style];
 }
 
+function dashScopeInstructions(env: Env, style: typeof STYLE_VALUES[number] | undefined): string {
+  const base = env.TTS_INSTRUCTIONS?.trim() || DEFAULT_DASHSCOPE_INSTRUCTIONS;
+  if (!style) return base;
+  const mapping: Record<typeof STYLE_VALUES[number], string> = {
+    soft: "更轻柔、更贴近耳语，但保持清晰。",
+    teasing: "带一点亲昵的笑意和轻微逗弄感。",
+    excited: "情绪更明亮、有活力，语速略快。",
+    tired: "带一点疲惫和放松，语速更慢。",
+    laughing: "语气里带自然笑意，不要夸张大笑。",
+    curious: "带温柔的好奇感，句尾有轻微上扬。",
+  };
+  return `${base}${mapping[style]}`;
+}
+
 function dashScopeAudioType(contentType: string | null): Pick<AudioResult, "audioMimeType" | "fileExtension"> {
   const normalized = contentType?.split(";", 1)[0]?.trim().toLowerCase();
   if (normalized === "audio/mpeg" || normalized === "audio/mp3") return { audioMimeType: "audio/mpeg", fileExtension: "mp3" };
@@ -276,14 +292,20 @@ function dashScopeAudioType(contentType: string | null): Pick<AudioResult, "audi
   return { audioMimeType: "audio/wav", fileExtension: "wav" };
 }
 
-export async function generateDashScope(env: Env, text: string): Promise<AudioResult> {
+export async function generateDashScope(env: Env, text: string, style?: typeof STYLE_VALUES[number]): Promise<AudioResult> {
   if (!env.DASHSCOPE_API_KEY || !env.VOICE_ID) throw new Error("TTS_NOT_CONFIGURED");
+  const model = env.TTS_MODEL || "qwen3-tts-flash";
+  const input: Record<string, string | boolean> = { text, voice: env.VOICE_ID, language_type: "Chinese" };
+  if (model.includes("instruct")) {
+    input.instructions = dashScopeInstructions(env, style);
+    input.optimize_instructions = true;
+  }
   const response = await fetch("https://dashscope.aliyuncs.com/api/v1/services/aigc/multimodal-generation/generation", {
     method: "POST",
     headers: { Authorization: `Bearer ${env.DASHSCOPE_API_KEY}`, "Content-Type": "application/json" },
     body: JSON.stringify({
-      model: env.TTS_MODEL || "qwen3-tts-flash",
-      input: { text, voice: env.VOICE_ID, language_type: "Chinese" },
+      model,
+      input,
     }),
     signal: AbortSignal.timeout(getLimits(env).ttsTimeoutMs),
   });
@@ -334,23 +356,24 @@ async function generateElevenLabs(env: Env, text: string, style?: typeof STYLE_V
 }
 
 async function generateAudio(env: Env, text: string, style?: typeof STYLE_VALUES[number]): Promise<AudioResult> {
-  return env.TTS_PROVIDER === "elevenlabs" ? generateElevenLabs(env, text, style) : generateDashScope(env, text);
+  return env.TTS_PROVIDER === "elevenlabs" ? generateElevenLabs(env, text, style) : generateDashScope(env, text, style);
 }
 
 export function getPlayerHtml(botName: string): string {
   return `<!doctype html>
 <html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
-<style>:root{color-scheme:light dark;font-family:ui-sans-serif,system-ui,sans-serif}body{margin:0;padding:12px;background:transparent}.card{border:1px solid color-mix(in srgb,currentColor 18%,transparent);border-radius:16px;padding:14px;background:color-mix(in srgb,Canvas 94%,transparent);box-shadow:0 8px 24px #0001}.row{display:flex;align-items:center;gap:12px}.play{width:42px;height:42px;border:0;border-radius:50%;background:#18a058;color:#fff;font-size:18px;cursor:pointer}.wave{flex:1;height:8px;border-radius:8px;background:linear-gradient(90deg,#18a058 var(--p,0%),#8884 var(--p,0%))}.time{font-variant-numeric:tabular-nums;font-size:12px;opacity:.7}.actions{display:flex;gap:8px;margin-top:12px}.actions button{border:1px solid #8885;background:transparent;border-radius:9px;padding:6px 10px;color:inherit;cursor:pointer}.transcript{display:none;margin:10px 0 0;white-space:pre-wrap;line-height:1.55}.transcript.open{display:block}.error{color:#c33}</style></head><body><section class="card"><div class="row"><button class="play" aria-label="播放">▶</button><div class="wave"></div><span class="time">0:00</span></div><div class="actions"><button class="toggle">文字</button><button class="download">下载音频</button></div><p class="transcript"></p><p class="error" hidden></p></section>
+<style>:root{color-scheme:light dark;font-family:ui-sans-serif,system-ui,sans-serif}body{margin:0;padding:12px;background:transparent}.card{border:1px solid color-mix(in srgb,currentColor 18%,transparent);border-radius:16px;padding:14px;background:color-mix(in srgb,Canvas 94%,transparent);box-shadow:0 8px 24px #0001}.row{display:flex;align-items:center;gap:12px}.play{width:42px;height:42px;border:0;border-radius:50%;background:#18a058;color:#fff;font-size:18px;cursor:pointer}.wave{flex:1;height:8px;border-radius:8px;background:linear-gradient(90deg,#18a058 var(--p,0%),#8884 var(--p,0%))}.time{font-variant-numeric:tabular-nums;font-size:12px;opacity:.7}.actions{display:flex;gap:8px;margin-top:12px}.actions button{border:1px solid #8885;background:transparent;border-radius:9px;padding:6px 10px;color:inherit;cursor:pointer}.actions button:disabled{cursor:wait;opacity:.6}.transcript{display:none;margin:10px 0 0;white-space:pre-wrap;line-height:1.55}.transcript.open{display:block}.error{color:#c33}</style></head><body><section class="card"><div class="row"><button class="play" aria-label="播放">▶</button><div class="wave"></div><span class="time">0:00</span></div><div class="actions"><button class="toggle">文字</button><button class="download">下载音频</button></div><p class="transcript"></p><p class="error" hidden></p></section>
 <script>
 const BOT_NAME=${serializeForInlineScript(botName)};
-let audio,url,filename,loadedBase64;
+let audio,url,audioBlob,filename,loadedBase64;
 const play=document.querySelector('.play'),wave=document.querySelector('.wave'),time=document.querySelector('.time'),transcript=document.querySelector('.transcript'),error=document.querySelector('.error'),download=document.querySelector('.download');
 function fmt(s){if(!Number.isFinite(s))return '0:00';return Math.floor(s/60)+':'+String(Math.floor(s%60)).padStart(2,'0')}
-function load(data){try{if(!data?.audio_base64||data.audio_base64===loadedBase64)return;loadedBase64=data.audio_base64;if(url)URL.revokeObjectURL(url);const raw=atob(data.audio_base64),bytes=new Uint8Array(raw.length);for(let i=0;i<raw.length;i++)bytes[i]=raw.charCodeAt(i);const mime=data.audio_mime_type||'audio/mpeg';url=URL.createObjectURL(new Blob([bytes],{type:mime}));filename=data.filename||((BOT_NAME||'voice')+'-'+new Date().toISOString().replace(/[:.]/g,'-')+(mime.includes('wav')?'.wav':'.mp3'));download.textContent=filename.toLowerCase().endsWith('.wav')?'下载 WAV':'下载 MP3';audio=new Audio(url);transcript.textContent=data.text||'';audio.onloadedmetadata=()=>time.textContent=fmt(audio.duration);audio.ontimeupdate=()=>{time.textContent=fmt(audio.currentTime);wave.style.setProperty('--p',((audio.currentTime/(audio.duration||1))*100)+'%')};audio.onended=()=>play.textContent='▶';error.hidden=true}catch{error.textContent='语音卡片加载失败';error.hidden=false}}
+function load(data){try{if(!data?.audio_base64||data.audio_base64===loadedBase64)return;loadedBase64=data.audio_base64;if(url)URL.revokeObjectURL(url);const raw=atob(data.audio_base64),bytes=new Uint8Array(raw.length);for(let i=0;i<raw.length;i++)bytes[i]=raw.charCodeAt(i);const mime=data.audio_mime_type||'audio/mpeg';audioBlob=new Blob([bytes],{type:mime});url=URL.createObjectURL(audioBlob);filename=data.filename||((BOT_NAME||'voice')+'-'+new Date().toISOString().replace(/[:.]/g,'-')+(mime.includes('wav')?'.wav':'.mp3'));download.textContent=filename.toLowerCase().endsWith('.wav')?'下载 WAV':'下载 MP3';audio=new Audio(url);transcript.textContent=data.text||'';audio.onloadedmetadata=()=>time.textContent=fmt(audio.duration);audio.ontimeupdate=()=>{time.textContent=fmt(audio.currentTime);wave.style.setProperty('--p',((audio.currentTime/(audio.duration||1))*100)+'%')};audio.onended=()=>play.textContent='▶';error.hidden=true}catch{error.textContent='语音卡片加载失败';error.hidden=false}}
 function readCurrentOutput(){load(window.openai?.toolOutput)}
 play.onclick=async()=>{if(!audio)return;try{if(audio.paused){await audio.play();play.textContent='Ⅱ'}else{audio.pause();play.textContent='▶'}}catch{error.textContent='浏览器未能播放这段音频';error.hidden=false}};
 document.querySelector('.toggle').onclick=()=>transcript.classList.toggle('open');
-download.onclick=()=>{if(!url)return;const a=document.createElement('a');a.href=url;a.download=filename;a.click()};
+function openDownload(href,name){const a=document.createElement('a');a.href=href;a.download=name||'';a.target='_blank';a.rel='noopener';document.body.appendChild(a);a.click();a.remove()}
+download.onclick=async()=>{if(!url||!audioBlob)return;const label=download.textContent;download.disabled=true;download.textContent='准备下载…';error.hidden=true;try{if(window.openai?.uploadFile&&window.openai?.getFileDownloadUrl){const uploaded=await window.openai.uploadFile(new File([audioBlob],filename,{type:audioBlob.type}));const result=await window.openai.getFileDownloadUrl({fileId:uploaded.fileId});if(!result?.downloadUrl)throw new Error('DOWNLOAD_URL_MISSING');if(window.openai.openExternal)await window.openai.openExternal({href:result.downloadUrl,redirectUrl:false});else openDownload(result.downloadUrl,filename)}else openDownload(url,filename)}catch{error.textContent='下载准备失败，请稍后重试';error.hidden=false}finally{download.disabled=false;download.textContent=label}};
 window.addEventListener('openai:set_globals',event=>load(event.detail?.globals?.toolOutput));
 window.addEventListener('message',event=>{if(event.source!==window.parent)return;const d=event.data;if(d?.type==='ui/notifications/tool-result')load(d.structuredContent)});
 readCurrentOutput();
@@ -361,7 +384,7 @@ window.parent.postMessage({type:'ui/notifications/initialized'},'*');
 
 function createVoiceServer(env: Env, subject: string): McpServer {
   const botName = env.BOT_NAME || "AI";
-  const server = new McpServer({ name: "voice-mcp", version: "1.1.0-c2" });
+  const server = new McpServer({ name: "voice-mcp", version: "1.1.0-c3" });
   server.registerResource("voice-player", VOICE_RESOURCE_URI, { mimeType: "text/html+skybridge", description: "Private inline voice player" }, async () => ({
     contents: [{ uri: VOICE_RESOURCE_URI, mimeType: "text/html+skybridge", text: getPlayerHtml(botName) }],
   }));
@@ -421,7 +444,7 @@ export default {
   async fetch(request: Request, env: Env, ctx: ExecutionContext): Promise<Response> {
     const url = new URL(request.url);
     if (request.method === "GET" && (url.pathname === "/.well-known/oauth-protected-resource" || url.pathname === "/.well-known/oauth-protected-resource/mcp")) return resourceMetadata(request, env);
-    if (request.method === "GET" && url.pathname === "/healthz") return Response.json({ status: "ok", service: "voice-mcp", version: "1.1.0-c2" }, { headers: { "Cache-Control": "no-store" } });
+    if (request.method === "GET" && url.pathname === "/healthz") return Response.json({ status: "ok", service: "voice-mcp", version: "1.1.0-c3" }, { headers: { "Cache-Control": "no-store" } });
     if (url.pathname !== "/mcp") return new Response("Not Found", { status: 404 });
     const auth = await authenticate(request, env);
     if (auth instanceof Response) return auth;

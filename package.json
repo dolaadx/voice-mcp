@@ -1,6 +1,6 @@
 {
   "name": "voice-mcp",
-  "version": "1.1.0-c1",
+  "version": "1.1.0-c3",
   "description": "OAuth-protected MCP server for private voice synthesis",
   "private": true,
   "type": "module",
