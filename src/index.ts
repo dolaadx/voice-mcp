@@ -293,8 +293,21 @@ export async function generateDashScope(env: Env, text: string): Promise<AudioRe
   if (inlineAudio) return { audioBase64: inlineAudio, audioMimeType: "audio/wav", fileExtension: "wav", provider: "dashscope" };
   const audioUrl = data.output?.audio?.url;
   if (!audioUrl) throw new Error("TTS_PROVIDER_ERROR");
-  const parsed = new URL(audioUrl);
-  if (parsed.protocol !== "https:" || !/\.(aliyuncs\.com|aliyun\.com)$/.test(`.${parsed.hostname}`)) throw new Error("TTS_UNTRUSTED_AUDIO_URL");
+  let parsed: URL;
+  try {
+    parsed = new URL(audioUrl);
+  } catch {
+    throw new Error("TTS_UNTRUSTED_AUDIO_URL");
+  }
+  const hostname = parsed.hostname.toLowerCase().replace(/\.$/, "");
+  const trustedHost = ["aliyuncs.com", "aliyun.com"].some((domain) => hostname === domain || hostname.endsWith(`.${domain}`));
+  const trustedProtocol = parsed.protocol === "http:" || parsed.protocol === "https:";
+  const trustedPort = parsed.port === "" || (parsed.protocol === "http:" ? parsed.port === "80" : parsed.port === "443");
+  if (!trustedHost || !trustedProtocol || !trustedPort || parsed.username || parsed.password) throw new Error("TTS_UNTRUSTED_AUDIO_URL");
+  // DashScope currently returns an HTTP presigned OSS URL. Validate its host first,
+  // then upgrade the download to HTTPS so its signature and audio never cross plaintext.
+  parsed.protocol = "https:";
+  parsed.port = "";
   const audioResponse = await fetch(parsed, { signal: AbortSignal.timeout(getLimits(env).ttsTimeoutMs) });
   if (!audioResponse.ok) throw new Error("TTS_PROVIDER_ERROR");
   const audioType = dashScopeAudioType(audioResponse.headers.get("Content-Type"));

@@ -37,7 +37,7 @@ test("DashScope uses the Qwen3-TTS endpoint and preserves returned audio type", 
     const url = String(input);
     calls.push({ url, init });
     if (calls.length === 1) {
-      return Response.json({ output: { audio: { url: "https://dashscope-result.oss-cn-beijing.aliyuncs.com/private/result.wav" } } });
+      return Response.json({ output: { audio: { url: "http://dashscope-result.oss-cn-beijing.aliyuncs.com/private/result.wav?Signature=test" } } });
     }
     return new Response(new Uint8Array([82, 73, 70, 70]), { headers: { "Content-Type": "audio/wav" } });
   }) as typeof fetch;
@@ -54,11 +54,27 @@ test("DashScope uses the Qwen3-TTS endpoint and preserves returned audio type", 
     input: { text: "哥哥，我回来了。", voice: "Kai", language_type: "Chinese" },
   });
   assert.equal(new Headers(calls[0]?.init?.headers).get("Authorization"), "Bearer test-key");
-  assert.equal(calls[1]?.url, "https://dashscope-result.oss-cn-beijing.aliyuncs.com/private/result.wav");
+  assert.equal(calls[1]?.url, "https://dashscope-result.oss-cn-beijing.aliyuncs.com/private/result.wav?Signature=test");
   assert.equal(result.audioBase64, "UklGRg==");
   assert.equal(result.audioMimeType, "audio/wav");
   assert.equal(result.fileExtension, "wav");
   assert.equal(result.provider, "dashscope");
+});
+
+test("DashScope rejects untrusted audio URLs without fetching them", async (t) => {
+  const originalFetch = globalThis.fetch;
+  t.after(() => { globalThis.fetch = originalFetch; });
+  let calls = 0;
+  globalThis.fetch = (async () => {
+    calls += 1;
+    return Response.json({ output: { audio: { url: "https://aliyuncs.com.attacker.example/result.wav" } } });
+  }) as typeof fetch;
+
+  await assert.rejects(
+    generateDashScope({ DASHSCOPE_API_KEY: "test-key", VOICE_ID: "Kai" } as Env, "测试"),
+    /TTS_UNTRUSTED_AUDIO_URL/,
+  );
+  assert.equal(calls, 1);
 });
 
 test("quota state enforces minute, day, and character limits", () => {
