@@ -1,6 +1,7 @@
 {
   "name": "voice-mcp",
   "main": "src/index.ts",
+  "keep_vars": true,
   "compatibility_date": "2025-04-01",
   "compatibility_flags": ["nodejs_compat"],
   "durable_objects": {
