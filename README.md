@@ -38,7 +38,10 @@ These remain placeholders until the authorized account-configuration phase.
 | `OAUTH_JWKS_URI` | HTTPS JWKS endpoint |
 | `ALLOWED_SUBS` | Comma-separated owner subject IDs |
 | `TTS_PROVIDER` | `dashscope` or `elevenlabs` |
-| Provider API key and voice ID | Private TTS credentials |
+| `DASHSCOPE_API_KEY` | Private Alibaba Cloud Model Studio API key |
+| `TTS_MODEL` | Qwen TTS model; defaults to `qwen3-tts-flash` |
+| `VOICE_ID` | Qwen system voice; use `Kai` for the initial Chinese voice |
+| ElevenLabs API key and voice ID | Private ElevenLabs credentials |
 | `BOT_NAME` | Safe display name in the voice card |
 
 Never commit real values. Configure them as Worker secrets/variables only during the deployment phase.
