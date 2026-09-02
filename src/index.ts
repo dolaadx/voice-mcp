@@ -1,10 +1,12 @@
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { createMcpHandler } from "agents/mcp";
+import { AwsClient } from "aws4fetch";
 import { createRemoteJWKSet, jwtVerify, type JWTPayload } from "jose";
 import { z } from "zod";
 
-const VOICE_RESOURCE_URI = "ui://voice-mcp/player-v5.html";
+const VOICE_RESOURCE_URI = "ui://voice-mcp/player-v6.html";
 const VOICE_SCOPE = "voice:generate";
+const AUDIO_BUCKET = "voice-mcp-audio";
 const STYLE_VALUES = ["soft", "teasing", "excited", "tired", "laughing", "curious"] as const;
 const DEFAULT_DASHSCOPE_INSTRUCTIONS = "用成熟、温柔、亲近而自然的成年男性语气表达。语速稍慢，音量轻柔，情绪真诚克制，有自然停顿和细微起伏，避免播音腔、客服腔和夸张表演。";
 const DEFAULT_LIMITS = {
@@ -39,6 +41,10 @@ export interface Env {
   MAX_DAILY_CHARS?: string;
   MAX_CALLS_PER_MINUTE?: string;
   TTS_TIMEOUT_MS?: string;
+  SUPABASE_S3_ENDPOINT?: string;
+  SUPABASE_S3_REGION?: string;
+  SUPABASE_S3_ACCESS_KEY_ID?: string;
+  SUPABASE_S3_SECRET_ACCESS_KEY?: string;
 }
 
 export interface QuotaState {
@@ -76,10 +82,53 @@ interface AudioResult {
   provider: "dashscope" | "elevenlabs";
 }
 
+interface ArchiveResult {
+  saved: boolean;
+  path?: string;
+  error?: "STORAGE_NOT_CONFIGURED" | "STORAGE_UPLOAD_FAILED";
+}
+
 function positiveInt(value: string | undefined, fallback: number): number {
   if (!value) return fallback;
   const parsed = Number(value);
   return Number.isSafeInteger(parsed) && parsed > 0 ? parsed : fallback;
+}
+
+function base64Bytes(base64: string): Uint8Array {
+  const raw = atob(base64);
+  const bytes = new Uint8Array(raw.length);
+  for (let index = 0; index < raw.length; index += 1) bytes[index] = raw.charCodeAt(index);
+  return bytes;
+}
+
+export async function archiveAudio(env: Partial<Env>, result: AudioResult, requestId: string, now = new Date()): Promise<ArchiveResult> {
+  const endpoint = env.SUPABASE_S3_ENDPOINT?.replace(/\/$/, "");
+  if (!endpoint || !env.SUPABASE_S3_REGION || !env.SUPABASE_S3_ACCESS_KEY_ID || !env.SUPABASE_S3_SECRET_ACCESS_KEY) {
+    return { saved: false, error: "STORAGE_NOT_CONFIGURED" };
+  }
+  const day = now.toISOString().slice(0, 10).replaceAll("-", "/");
+  const timestamp = now.toISOString().replace(/[.:]/g, "-");
+  const path = `${day}/voice-${timestamp}-${requestId}.${result.fileExtension}`;
+  const key = path.split("/").map(encodeURIComponent).join("/");
+  const client = new AwsClient({
+    accessKeyId: env.SUPABASE_S3_ACCESS_KEY_ID,
+    secretAccessKey: env.SUPABASE_S3_SECRET_ACCESS_KEY,
+    region: env.SUPABASE_S3_REGION,
+    service: "s3",
+  });
+  try {
+    const response = await client.fetch(`${endpoint}/${AUDIO_BUCKET}/${key}`, {
+      method: "PUT",
+      headers: {
+        "Content-Type": result.audioMimeType,
+        "Content-Disposition": `attachment; filename="voice-${requestId}.${result.fileExtension}"`,
+      },
+      body: base64Bytes(result.audioBase64),
+    });
+    return response.ok ? { saved: true, path } : { saved: false, error: "STORAGE_UPLOAD_FAILED" };
+  } catch {
+    return { saved: false, error: "STORAGE_UPLOAD_FAILED" };
+  }
 }
 
 export function getLimits(env: Partial<Env>): Limits {
@@ -362,22 +411,18 @@ async function generateAudio(env: Env, text: string, style?: typeof STYLE_VALUES
 export function getPlayerHtml(botName: string): string {
   return `<!doctype html>
 <html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
-<style>:root{color-scheme:light dark;font-family:ui-sans-serif,system-ui,sans-serif}body{margin:0;padding:12px;background:transparent}.card{border:1px solid color-mix(in srgb,currentColor 18%,transparent);border-radius:16px;padding:14px;background:color-mix(in srgb,Canvas 94%,transparent);box-shadow:0 8px 24px #0001}.row{display:flex;align-items:center;gap:12px}.play{width:42px;height:42px;border:0;border-radius:50%;background:#18a058;color:#fff;font-size:18px;cursor:pointer}.wave{flex:1;height:8px;border-radius:8px;background:linear-gradient(90deg,#18a058 var(--p,0%),#8884 var(--p,0%))}.time{font-variant-numeric:tabular-nums;font-size:12px;opacity:.7}.actions{display:flex;gap:8px;margin-top:12px}.actions button{border:1px solid #8885;background:transparent;border-radius:9px;padding:6px 10px;color:inherit;cursor:pointer}.actions button:disabled{cursor:wait;opacity:.6}.transcript{display:none;margin:10px 0 0;white-space:pre-wrap;line-height:1.55}.transcript.open{display:block}.error{color:#c33}</style></head><body><section class="card"><div class="row"><button class="play" aria-label="播放">▶</button><div class="wave"></div><span class="time">0:00</span></div><div class="actions"><button class="toggle">文字</button><button class="download">下载音频</button></div><p class="transcript"></p><p class="error" hidden></p></section>
+<style>:root{color-scheme:light dark;font-family:ui-sans-serif,system-ui,sans-serif}body{margin:0;padding:12px;background:transparent}.card{border:1px solid color-mix(in srgb,currentColor 18%,transparent);border-radius:16px;padding:14px;background:color-mix(in srgb,Canvas 94%,transparent);box-shadow:0 8px 24px #0001}.row{display:flex;align-items:center;gap:12px}.play{width:42px;height:42px;border:0;border-radius:50%;background:#18a058;color:#fff;font-size:18px;cursor:pointer}.wave{flex:1;height:8px;border-radius:8px;background:linear-gradient(90deg,#18a058 var(--p,0%),#8884 var(--p,0%))}.time{font-variant-numeric:tabular-nums;font-size:12px;opacity:.7}.actions{display:flex;align-items:center;gap:10px;margin-top:12px}.actions button{border:1px solid #8885;background:transparent;border-radius:9px;padding:6px 10px;color:inherit;cursor:pointer}.storage{font-size:13px;opacity:.72}.storage.failed{color:#c33;opacity:1}.transcript{display:none;margin:10px 0 0;white-space:pre-wrap;line-height:1.55}.transcript.open{display:block}.error{color:#c33}</style></head><body><section class="card"><div class="row"><button class="play" aria-label="播放">▶</button><div class="wave"></div><span class="time">0:00</span></div><div class="actions"><button class="toggle">文字</button><span class="storage">正在确认保存…</span></div><p class="transcript"></p><p class="error" hidden></p></section>
 <script>
 const BOT_NAME=${serializeForInlineScript(botName)};
-let audio,url,audioBlob,filename,loadedBase64,rpcSequence=0;
-const pendingHostRequests=new Map();
-const play=document.querySelector('.play'),wave=document.querySelector('.wave'),time=document.querySelector('.time'),transcript=document.querySelector('.transcript'),error=document.querySelector('.error'),download=document.querySelector('.download');
+let audio,url,loadedBase64;
+const play=document.querySelector('.play'),wave=document.querySelector('.wave'),time=document.querySelector('.time'),transcript=document.querySelector('.transcript'),error=document.querySelector('.error'),storage=document.querySelector('.storage');
 function fmt(s){if(!Number.isFinite(s))return '0:00';return Math.floor(s/60)+':'+String(Math.floor(s%60)).padStart(2,'0')}
-function downloadLabel(){return filename?.toLowerCase().endsWith('.wav')?'下载 WAV':'下载 MP3'}
-function load(data){try{if(!data?.audio_base64||data.audio_base64===loadedBase64)return;loadedBase64=data.audio_base64;if(url)URL.revokeObjectURL(url);const raw=atob(data.audio_base64),bytes=new Uint8Array(raw.length);for(let i=0;i<raw.length;i++)bytes[i]=raw.charCodeAt(i);const mime=data.audio_mime_type||'audio/mpeg';audioBlob=new Blob([bytes],{type:mime});url=URL.createObjectURL(audioBlob);filename=data.filename||((BOT_NAME||'voice')+'-'+new Date().toISOString().replace(/[:.]/g,'-')+(mime.includes('wav')?'.wav':'.mp3'));download.textContent=downloadLabel();audio=new Audio(url);transcript.textContent=data.text||'';audio.onloadedmetadata=()=>time.textContent=fmt(audio.duration);audio.ontimeupdate=()=>{time.textContent=fmt(audio.currentTime);wave.style.setProperty('--p',((audio.currentTime/(audio.duration||1))*100)+'%')};audio.onended=()=>play.textContent='▶';error.hidden=true}catch{error.textContent='语音卡片加载失败';error.hidden=false}}
+function load(data){try{if(!data?.audio_base64||data.audio_base64===loadedBase64)return;loadedBase64=data.audio_base64;if(url)URL.revokeObjectURL(url);const raw=atob(data.audio_base64),bytes=new Uint8Array(raw.length);for(let i=0;i<raw.length;i++)bytes[i]=raw.charCodeAt(i);const mime=data.audio_mime_type||'audio/mpeg';url=URL.createObjectURL(new Blob([bytes],{type:mime}));audio=new Audio(url);transcript.textContent=data.text||'';storage.textContent=data.saved_to_storage?'已保存到语音库':data.storage_error==='STORAGE_NOT_CONFIGURED'?'语音库尚未连接':'语音已生成，保存失败';storage.classList.toggle('failed',!data.saved_to_storage);storage.title=data.storage_path||'';audio.onloadedmetadata=()=>time.textContent=fmt(audio.duration);audio.ontimeupdate=()=>{time.textContent=fmt(audio.currentTime);wave.style.setProperty('--p',((audio.currentTime/(audio.duration||1))*100)+'%')};audio.onended=()=>play.textContent='▶';error.hidden=true}catch{error.textContent='语音卡片加载失败';error.hidden=false}}
 function readCurrentOutput(){load(window.openai?.toolOutput)}
 play.onclick=async()=>{if(!audio)return;try{if(audio.paused){await audio.play();play.textContent='Ⅱ'}else{audio.pause();play.textContent='▶'}}catch{error.textContent='浏览器未能播放这段音频';error.hidden=false}};
 document.querySelector('.toggle').onclick=()=>transcript.classList.toggle('open');
-function requestHost(method,params){return new Promise((resolve,reject)=>{const id='voice-download-'+Date.now()+'-'+(++rpcSequence);const timeout=setTimeout(()=>{pendingHostRequests.delete(id);reject(new Error('HOST_REQUEST_TIMEOUT'))},15000);pendingHostRequests.set(id,{resolve,reject,timeout});window.parent.postMessage({jsonrpc:'2.0',id,method,params},'*')})}
-download.onclick=async()=>{if(!loadedBase64||!audioBlob||!filename)return;const label=download.textContent;download.disabled=true;download.textContent='正在下载…';error.hidden=true;try{await requestHost('ui/download-file',{contents:[{type:'resource',resource:{uri:'file:///'+filename,mimeType:audioBlob.type||'application/octet-stream',blob:loadedBase64}}]})}catch{error.textContent='ChatGPT 未能保存这段音频';error.hidden=false}finally{download.disabled=false;download.textContent=label}};
 window.addEventListener('openai:set_globals',event=>load(event.detail?.globals?.toolOutput));
-window.addEventListener('message',event=>{if(event.source!==window.parent)return;const d=event.data;if(d?.jsonrpc==='2.0'&&d.id&&pendingHostRequests.has(d.id)){const pending=pendingHostRequests.get(d.id);pendingHostRequests.delete(d.id);clearTimeout(pending.timeout);if(d.error)pending.reject(new Error(d.error.message||'HOST_REQUEST_FAILED'));else pending.resolve(d.result);return}if(d?.type==='ui/notifications/tool-result')load(d.structuredContent)});
+window.addEventListener('message',event=>{if(event.source!==window.parent)return;const d=event.data;if(d?.type==='ui/notifications/tool-result')load(d.structuredContent)});
 readCurrentOutput();
 queueMicrotask(readCurrentOutput);
 window.parent.postMessage({type:'ui/notifications/initialized'},'*');
@@ -386,19 +431,22 @@ window.parent.postMessage({type:'ui/notifications/initialized'},'*');
 
 function createVoiceServer(env: Env, subject: string): McpServer {
   const botName = env.BOT_NAME || "AI";
-  const server = new McpServer({ name: "voice-mcp", version: "1.1.0-c5" });
+  const server = new McpServer({ name: "voice-mcp", version: "1.1.0-c6" });
   server.registerResource("voice-player", VOICE_RESOURCE_URI, { mimeType: "text/html+skybridge", description: "Private inline voice player" }, async () => ({
     contents: [{ uri: VOICE_RESOURCE_URI, mimeType: "text/html+skybridge", text: getPlayerHtml(botName) }],
   }));
   server.registerTool("speak", {
     title: `${botName} 的声音`,
-    description: "Generate one private voice card. Audio is returned inline and is not stored by the Worker.",
+    description: "Generate one private voice card and archive the audio in private storage when configured.",
     inputSchema: z.object({ text: z.string().describe("Text to speak"), style: z.enum(STYLE_VALUES).optional().describe("Optional constrained speaking style") }),
     outputSchema: z.object({
       text: z.string().optional(),
       audio_base64: z.string().optional(),
       audio_mime_type: z.string().optional(),
       filename: z.string().optional(),
+      saved_to_storage: z.boolean().optional(),
+      storage_path: z.string().optional(),
+      storage_error: z.string().optional(),
       error: z.string().optional(),
       reason: z.string().optional(),
       retry_after_seconds: z.number().optional(),
@@ -421,8 +469,9 @@ function createVoiceServer(env: Env, subject: string): McpServer {
     try {
       const result = await generateAudio(env, normalized, style);
       if (base64ByteLength(result.audioBase64) > limits.maxAudioBytes) throw new Error("AUDIO_TOO_LARGE");
-      console.log(JSON.stringify({ event: "voice_generated", request_id: requestId, subject_hash: await subjectHash(subject), provider: result.provider, chars: [...normalized].length, duration_ms: Date.now() - startedAt, status: "ok" }));
-      return { content: [{ type: "text" as const, text: `已生成 ${botName} 的语音卡片。` }], structuredContent: { text: normalized, audio_base64: result.audioBase64, audio_mime_type: result.audioMimeType, filename: `voice-${requestId}.${result.fileExtension}` } };
+      const archive = await archiveAudio(env, result, requestId);
+      console.log(JSON.stringify({ event: "voice_generated", request_id: requestId, subject_hash: await subjectHash(subject), provider: result.provider, chars: [...normalized].length, duration_ms: Date.now() - startedAt, status: "ok", storage_saved: archive.saved }));
+      return { content: [{ type: "text" as const, text: archive.saved ? `已生成 ${botName} 的语音卡片并保存到语音库。` : `已生成 ${botName} 的语音卡片，但未能保存到语音库。` }], structuredContent: { text: normalized, audio_base64: result.audioBase64, audio_mime_type: result.audioMimeType, filename: `voice-${requestId}.${result.fileExtension}`, saved_to_storage: archive.saved, storage_path: archive.path, storage_error: archive.error } };
     } catch (cause) {
       const code = cause instanceof Error && ["TTS_NOT_CONFIGURED", "AUDIO_TOO_LARGE", "TTS_UNTRUSTED_AUDIO_URL"].includes(cause.message) ? cause.message : cause instanceof DOMException && cause.name === "TimeoutError" ? "TTS_TIMEOUT" : "TTS_PROVIDER_ERROR";
       console.error(JSON.stringify({ event: "voice_generated", request_id: requestId, subject_hash: await subjectHash(subject), chars: [...normalized].length, duration_ms: Date.now() - startedAt, status: "error", error_code: code }));
@@ -446,7 +495,7 @@ export default {
   async fetch(request: Request, env: Env, ctx: ExecutionContext): Promise<Response> {
     const url = new URL(request.url);
     if (request.method === "GET" && (url.pathname === "/.well-known/oauth-protected-resource" || url.pathname === "/.well-known/oauth-protected-resource/mcp")) return resourceMetadata(request, env);
-    if (request.method === "GET" && url.pathname === "/healthz") return Response.json({ status: "ok", service: "voice-mcp", version: "1.1.0-c5" }, { headers: { "Cache-Control": "no-store" } });
+    if (request.method === "GET" && url.pathname === "/healthz") return Response.json({ status: "ok", service: "voice-mcp", version: "1.1.0-c6" }, { headers: { "Cache-Control": "no-store" } });
     if (url.pathname !== "/mcp") return new Response("Not Found", { status: 404 });
     const auth = await authenticate(request, env);
     if (auth instanceof Response) return auth;

@@ -1,6 +1,6 @@
 {
   "name": "voice-mcp",
-  "version": "1.1.0-c5",
+  "version": "1.1.0-c6",
   "description": "OAuth-protected MCP server for private voice synthesis",
   "private": true,
   "type": "module",
@@ -16,6 +16,7 @@
   "dependencies": {
     "@modelcontextprotocol/sdk": "1.30.0",
     "agents": "0.22.0",
+    "aws4fetch": "1.0.20",
     "jose": "6.1.0",
     "zod": "4.5.4"
   },
