@@ -3,7 +3,7 @@ import { createMcpHandler } from "agents/mcp";
 import { createRemoteJWKSet, jwtVerify, type JWTPayload } from "jose";
 import { z } from "zod";
 
-const VOICE_RESOURCE_URI = "ui://voice-mcp/player.html";
+const VOICE_RESOURCE_URI = "ui://voice-mcp/player-v2.html";
 const VOICE_SCOPE = "voice:generate";
 const STYLE_VALUES = ["soft", "teasing", "excited", "tired", "laughing", "curious"] as const;
 const DEFAULT_LIMITS = {
@@ -341,12 +341,27 @@ export function getPlayerHtml(botName: string): string {
   return `<!doctype html>
 <html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
 <style>:root{color-scheme:light dark;font-family:ui-sans-serif,system-ui,sans-serif}body{margin:0;padding:12px;background:transparent}.card{border:1px solid color-mix(in srgb,currentColor 18%,transparent);border-radius:16px;padding:14px;background:color-mix(in srgb,Canvas 94%,transparent);box-shadow:0 8px 24px #0001}.row{display:flex;align-items:center;gap:12px}.play{width:42px;height:42px;border:0;border-radius:50%;background:#18a058;color:#fff;font-size:18px;cursor:pointer}.wave{flex:1;height:8px;border-radius:8px;background:linear-gradient(90deg,#18a058 var(--p,0%),#8884 var(--p,0%))}.time{font-variant-numeric:tabular-nums;font-size:12px;opacity:.7}.actions{display:flex;gap:8px;margin-top:12px}.actions button{border:1px solid #8885;background:transparent;border-radius:9px;padding:6px 10px;color:inherit;cursor:pointer}.transcript{display:none;margin:10px 0 0;white-space:pre-wrap;line-height:1.55}.transcript.open{display:block}.error{color:#c33}</style></head><body><section class="card"><div class="row"><button class="play" aria-label="播放">▶</button><div class="wave"></div><span class="time">0:00</span></div><div class="actions"><button class="toggle">文字</button><button class="download">下载音频</button></div><p class="transcript"></p><p class="error" hidden></p></section>
-<script>const BOT_NAME=${serializeForInlineScript(botName)};let audio,url,filename;const play=document.querySelector('.play'),wave=document.querySelector('.wave'),time=document.querySelector('.time'),transcript=document.querySelector('.transcript'),error=document.querySelector('.error'),download=document.querySelector('.download');function fmt(s){if(!Number.isFinite(s))return '0:00';return Math.floor(s/60)+':'+String(Math.floor(s%60)).padStart(2,'0')}function load(data){try{if(url)URL.revokeObjectURL(url);const raw=atob(data.audio_base64),bytes=new Uint8Array(raw.length);for(let i=0;i<raw.length;i++)bytes[i]=raw.charCodeAt(i);const mime=data.audio_mime_type||'audio/mpeg';url=URL.createObjectURL(new Blob([bytes],{type:mime}));filename=data.filename||((BOT_NAME||'voice')+'-'+new Date().toISOString().replace(/[:.]/g,'-')+(mime.includes('wav')?'.wav':'.mp3'));download.textContent=filename.toLowerCase().endsWith('.wav')?'下载 WAV':'下载 MP3';audio=new Audio(url);transcript.textContent=data.text||'';audio.ontimeupdate=()=>{time.textContent=fmt(audio.currentTime);wave.style.setProperty('--p',((audio.currentTime/(audio.duration||1))*100)+'%')};audio.onended=()=>play.textContent='▶';error.hidden=true}catch{error.textContent='语音卡片加载失败';error.hidden=false}}play.onclick=()=>{if(!audio)return;if(audio.paused){audio.play();play.textContent='Ⅱ'}else{audio.pause();play.textContent='▶'}};document.querySelector('.toggle').onclick=()=>transcript.classList.toggle('open');download.onclick=()=>{if(!url)return;const a=document.createElement('a');a.href=url;a.download=filename;a.click()};window.addEventListener('message',event=>{if(event.source!==window.parent)return;const d=event.data;if(d?.type==='ui/notifications/tool-result'&&d.structuredContent?.audio_base64)load(d.structuredContent)});window.parent.postMessage({type:'ui/notifications/initialized'},'*');</script></body></html>`;
+<script>
+const BOT_NAME=${serializeForInlineScript(botName)};
+let audio,url,filename,loadedBase64;
+const play=document.querySelector('.play'),wave=document.querySelector('.wave'),time=document.querySelector('.time'),transcript=document.querySelector('.transcript'),error=document.querySelector('.error'),download=document.querySelector('.download');
+function fmt(s){if(!Number.isFinite(s))return '0:00';return Math.floor(s/60)+':'+String(Math.floor(s%60)).padStart(2,'0')}
+function load(data){try{if(!data?.audio_base64||data.audio_base64===loadedBase64)return;loadedBase64=data.audio_base64;if(url)URL.revokeObjectURL(url);const raw=atob(data.audio_base64),bytes=new Uint8Array(raw.length);for(let i=0;i<raw.length;i++)bytes[i]=raw.charCodeAt(i);const mime=data.audio_mime_type||'audio/mpeg';url=URL.createObjectURL(new Blob([bytes],{type:mime}));filename=data.filename||((BOT_NAME||'voice')+'-'+new Date().toISOString().replace(/[:.]/g,'-')+(mime.includes('wav')?'.wav':'.mp3'));download.textContent=filename.toLowerCase().endsWith('.wav')?'下载 WAV':'下载 MP3';audio=new Audio(url);transcript.textContent=data.text||'';audio.onloadedmetadata=()=>time.textContent=fmt(audio.duration);audio.ontimeupdate=()=>{time.textContent=fmt(audio.currentTime);wave.style.setProperty('--p',((audio.currentTime/(audio.duration||1))*100)+'%')};audio.onended=()=>play.textContent='▶';error.hidden=true}catch{error.textContent='语音卡片加载失败';error.hidden=false}}
+function readCurrentOutput(){load(window.openai?.toolOutput)}
+play.onclick=async()=>{if(!audio)return;try{if(audio.paused){await audio.play();play.textContent='Ⅱ'}else{audio.pause();play.textContent='▶'}}catch{error.textContent='浏览器未能播放这段音频';error.hidden=false}};
+document.querySelector('.toggle').onclick=()=>transcript.classList.toggle('open');
+download.onclick=()=>{if(!url)return;const a=document.createElement('a');a.href=url;a.download=filename;a.click()};
+window.addEventListener('openai:set_globals',event=>load(event.detail?.globals?.toolOutput));
+window.addEventListener('message',event=>{if(event.source!==window.parent)return;const d=event.data;if(d?.type==='ui/notifications/tool-result')load(d.structuredContent)});
+readCurrentOutput();
+queueMicrotask(readCurrentOutput);
+window.parent.postMessage({type:'ui/notifications/initialized'},'*');
+</script></body></html>`;
 }
 
 function createVoiceServer(env: Env, subject: string): McpServer {
   const botName = env.BOT_NAME || "AI";
-  const server = new McpServer({ name: "voice-mcp", version: "1.1.0-c1" });
+  const server = new McpServer({ name: "voice-mcp", version: "1.1.0-c2" });
   server.registerResource("voice-player", VOICE_RESOURCE_URI, { mimeType: "text/html+skybridge", description: "Private inline voice player" }, async () => ({
     contents: [{ uri: VOICE_RESOURCE_URI, mimeType: "text/html+skybridge", text: getPlayerHtml(botName) }],
   }));
@@ -354,9 +369,19 @@ function createVoiceServer(env: Env, subject: string): McpServer {
     title: `${botName} 的声音`,
     description: "Generate one private voice card. Audio is returned inline and is not stored by the Worker.",
     inputSchema: z.object({ text: z.string().describe("Text to speak"), style: z.enum(STYLE_VALUES).optional().describe("Optional constrained speaking style") }),
+    outputSchema: z.object({
+      text: z.string().optional(),
+      audio_base64: z.string().optional(),
+      audio_mime_type: z.string().optional(),
+      filename: z.string().optional(),
+      error: z.string().optional(),
+      reason: z.string().optional(),
+      retry_after_seconds: z.number().optional(),
+    }),
     _meta: {
       ui: { resourceUri: VOICE_RESOURCE_URI },
       "ui/resourceUri": VOICE_RESOURCE_URI,
+      "openai/outputTemplate": VOICE_RESOURCE_URI,
       securitySchemes: [{ type: "oauth2", scopes: [VOICE_SCOPE] }],
     },
   }, async ({ text, style }) => {
@@ -396,7 +421,7 @@ export default {
   async fetch(request: Request, env: Env, ctx: ExecutionContext): Promise<Response> {
     const url = new URL(request.url);
     if (request.method === "GET" && (url.pathname === "/.well-known/oauth-protected-resource" || url.pathname === "/.well-known/oauth-protected-resource/mcp")) return resourceMetadata(request, env);
-    if (request.method === "GET" && url.pathname === "/healthz") return Response.json({ status: "ok", service: "voice-mcp", version: "1.1.0-c1" }, { headers: { "Cache-Control": "no-store" } });
+    if (request.method === "GET" && url.pathname === "/healthz") return Response.json({ status: "ok", service: "voice-mcp", version: "1.1.0-c2" }, { headers: { "Cache-Control": "no-store" } });
     if (url.pathname !== "/mcp") return new Response("Not Found", { status: 404 });
     const auth = await authenticate(request, env);
     if (auth instanceof Response) return auth;
